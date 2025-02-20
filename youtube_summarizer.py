@@ -52,7 +52,7 @@ load_dotenv()
 
 # API Configuration
 DEFAULT_OLLAMA_URL = os.getenv("OLLAMA_URL") # Ollama server endpoint
-DEFAULT_OLLAMA_MODEL = "llama2"  # Default Ollama model to use
+DEFAULT_OLLAMA_MODEL = "mistral"  # Default Ollama model to use
 DEFAULT_LLM_PROVIDER = "openai"  # Default LLM provider
 DEFAULT_CONNECTION_TIMEOUT = 5  # Connection timeout in seconds
 
@@ -77,7 +77,7 @@ def test_ollama_connection(url: str, timeout: int = DEFAULT_CONNECTION_TIMEOUT) 
     Falls back to OpenAI if Ollama is not available.
     """
     try:
-        response = requests.get(f"{url}/api/health", timeout=timeout)
+        response = requests.get(f"{url}", timeout=timeout)
         return response.status_code == 200
     except Exception as e:
         print(f"Failed to connect to Ollama server at {url}")
@@ -112,7 +112,7 @@ class YouTubeSummarizer:
         Example:
             >>> summarizer = YouTubeSummarizer(
             ...     llm_provider="ollama",
-            ...     ollama_model="llama2",
+            ...     ollama_model="mistral",
             ...     ollama_url="{DEFAULT_OLLAMA_URL}"
             ... )
         """
