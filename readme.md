@@ -7,13 +7,11 @@ This is a Python script that summarizes YouTube videos. It uses the YouTube API 
 ### Requirements
 
 - Python 3.x    
-- DeepL API key
-- OpenAI API key
+- DeepL API key in .env file
+- OpenAI API key in .env file
 
 ### configuration OCI credentials
-- in oci_llm_test.py, edit CONFIG_PATH, KEY_PATH for your own
-- in oci_translation_test.py, edit CONFIG_PATH, KEY_PATH for your own
-- in oci_youtube_summarizer.py, edit CONFIG_PATH, KEY_PATH for your own
+- in .env file, edit OCI_CONFIG_PATH, OCI_KEY_PATH for your own
 
 ### Usage
 
