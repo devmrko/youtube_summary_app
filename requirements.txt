@@ -1,0 +1,10 @@
+langchain
+langchain-community
+langchain-ollama
+openai
+python-dotenv
+youtube-transcript-api 
+pytube
+deepl
+oci[ai,generative-ai-inference]>=2.119.1
+requests
