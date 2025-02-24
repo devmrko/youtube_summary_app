@@ -8,3 +8,6 @@ pytube
 deepl
 oci[ai,generative-ai-inference]>=2.119.1
 requests
+streamlit
+oracledb
+pandas
