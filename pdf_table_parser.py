@@ -21,12 +21,39 @@ import pdf2image
 import pytesseract
 from PIL import Image
 import io
+import oci
+
+MODEL_ID = "ocid1.generativeaimodel.oc1.us-chicago-1.amaaaaaask7dceyarleil5jr7k2rykljkhapnvhrqvzx4cwuvtfedlfxet4q"
 
 class EnhancedPDFTableParser:
     def __init__(self, output_dir: str = "parsed_tables"):
         """Initialize the Enhanced PDF Table Parser"""
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
+
+
+        
+        # Initialize OCI configuration
+        try:
+            self.config = oci.config.from_file()
+
+            self.llm_client = oci.generative_ai_inference.GenerativeAiInferenceClient(
+            config=self.config,
+            service_endpoint="https://inference.generativeai.us-chicago-1.oci.oraclecloud.com",
+            retry_strategy=oci.retry.NoneRetryStrategy(),
+            timeout=3600  # Single timeout value in seconds (1 hour)
+            )
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to load OCI config from file: {str(e)}")
+            self.config = {
+                "compartment_id": os.getenv("OCI_COMPARTMENT_ID"),
+                "tenancy": os.getenv("OCI_TENANCY"),
+                "user": os.getenv("OCI_USER"),
+                "key_file": os.getenv("OCI_KEY_FILE"),
+                "fingerprint": os.getenv("OCI_FINGERPRINT"),
+                "region": os.getenv("OCI_REGION", "us-ashburn-1")
+            }
         
         # Special character mappings
         self.special_chars = {
@@ -687,11 +714,152 @@ class EnhancedPDFTableParser:
             self.logger.error(f"Error extracting text content: {str(e)}")
             return None
 
+    def _process_markdown_with_summaries(self, markdown_path: str, deepl_api_key: str = None) -> Dict:
+        """Process markdown report to add summaries and translations"""
+        try:
+            import deepl
+            import oci
+            from oci.generative_ai_inference import GenerativeAiInferenceClient
+            from oci.generative_ai_inference.models import (
+                TextContent, Message, GenericChatRequest,
+                ChatDetails, OnDemandServingMode
+            )
+
+            summaries = {
+                'sections': [],
+                'tables': [],
+                'overall': ''
+            }
+
+            # Initialize DeepL translator if API key is provided
+            translator = None
+            if deepl_api_key:
+                translator = deepl.Translator(deepl_api_key)
+
+            # Initialize OCI Generative AI client
+            ai_client = GenerativeAiInferenceClient(self.config)
+
+            # Read markdown content
+            with open(markdown_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Split content into sections
+            sections = re.split(r'\n##\s+', content)
+            
+            # Process each section
+            for section in sections:
+                if not section.strip():
+                    continue
+                
+                # Get section title and content
+                lines = section.split('\n')
+                title = lines[0].strip('# ')
+                content = '\n'.join(lines[1:]).strip()
+
+                # Generate summary using OCI Generative AI
+                summary = self._get_oci_summary(content, ai_client)
+                
+                # Translate if DeepL is available
+                korean_summary = None
+                korean_content = None
+                if translator:
+                    try:
+                        korean_summary = translator.translate_text(
+                            summary,
+                            target_lang="KO",
+                        ).text
+                        korean_content = translator.translate_text(
+                            content,
+                            target_lang="KO",
+                        ).text
+                    except Exception as e:
+                        self.logger.error(f"Translation error: {str(e)}")
+
+                summaries['sections'].append({
+                    'title': title,
+                    'content': content,
+                    'summary': summary,
+                    'korean_summary': korean_summary,
+                    'korean_content': korean_content
+                })
+
+            # Generate overall summary
+            overall_text = '\n'.join(section['content'] for section in summaries['sections'])
+            summaries['overall'] = self._get_oci_summary(overall_text[:5000], ai_client)  # Limit to first 5000 chars
+            
+            if translator:
+                try:
+                    summaries['overall_korean'] = translator.translate_text(
+                        summaries['overall'],
+                        target_lang="KO",
+                    ).text
+                except Exception as e:
+                    self.logger.error(f"Translation error: {str(e)}")
+
+            return summaries
+
+        except Exception as e:
+            self.logger.error(f"Error processing markdown with summaries: {str(e)}")
+            return None
+
+    def _get_oci_summary(self, text: str, ai_client: 'GenerativeAiInferenceClient') -> str:
+        """Generate summary using OCI Generative AI"""
+        try:
+            # Create text content
+            content = oci.generative_ai_inference.models.TextContent()
+            content.text = f"Please summarize this text:\n\n{text}"
+            content.type = "TEXT"
+            
+            # Create message
+            message = oci.generative_ai_inference.models.Message()
+            message.role = "USER"
+            message.content = [content]
+            
+            # Create chat request
+            chat_request = oci.generative_ai_inference.models.GenericChatRequest()
+            chat_request.api_format = oci.generative_ai_inference.models.BaseChatRequest.API_FORMAT_GENERIC
+            chat_request.messages = [message]
+            
+            # Set model parameters
+            model_params = {
+                "temperature": 0.7,
+                "max_tokens": 500,
+                "top_p": 0.7,
+                "frequency_penalty": 0.0,
+                "presence_penalty": 0.0,
+                "stop": None
+            }
+            
+            for key, value in model_params.items():
+                setattr(chat_request, key, value)
+
+            # Create chat details
+            chat_details = oci.generative_ai_inference.models.ChatDetails()
+            chat_details.serving_mode = oci.generative_ai_inference.models.OnDemandServingMode(
+                model_id=MODEL_ID
+            )
+            chat_details.chat_request = chat_request
+            chat_details.compartment_id = oci.config.from_file()["tenancy"]
+
+            # Get response
+            # response = ai_client.chat(chat_details)
+            # summary = response.data.chat_response.choices[0].message.content[0].text
+
+            response = self.llm_client.chat(chat_details)
+            return response.data.chat_response.choices[0].message.content[0].text
+
+            # return summary[:500]  # Limit summary to 500 chars
+            
+        except Exception as e:
+            self.logger.error(f"Error generating summary: {str(e)}")
+            return text[:500]  # Return truncated text if summarization fails
+
 def main():
     """Main execution function"""
     parser = EnhancedPDFTableParser()
     
     pdf_path = input("Enter the path to your PDF file: ").strip()
+    deepl_api_key = os.getenv('DEEPL_API_KEY')
     
     if not os.path.exists(pdf_path):
         print("Error: PDF file not found!")
@@ -781,6 +949,39 @@ def main():
                     f.write("## Tables\n")
                     f.write("No tables were found in the document.\n\n")
                     
+                # Add summaries and translations section
+                print("\nGenerating summaries and translations...")
+                summaries = parser._process_markdown_with_summaries(report_path, deepl_api_key)
+                
+                if summaries:
+                    f.write("\n## Document Summary and Translation\n\n")
+                    
+                    # Write overall summary
+                    f.write("### Overall Summary\n\n")
+                    f.write("#### English Summary\n")
+                    f.write(f"{summaries['overall']}\n\n")
+                    
+                    if 'overall_korean' in summaries:
+                        f.write("#### Korean Summary (한국어 요약)\n")
+                        f.write(f"{summaries['overall_korean']}\n\n")
+                    
+                    # Write section summaries
+                    f.write("### Section Summaries\n\n")
+                    for section in summaries['sections']:
+                        f.write(f"#### {section['title']}\n\n")
+                        
+                        f.write("##### English Summary\n")
+                        f.write(f"{section['summary']}\n\n")
+                        
+                        if section['korean_summary']:
+                            f.write("##### Korean Summary (한국어 요약)\n")
+                            f.write(f"{section['korean_summary']}\n\n")
+                        
+                        f.write("<details>\n<summary>Full Korean Translation (전체 한국어 번역)</summary>\n\n")
+                        if section['korean_content']:
+                            f.write(f"{section['korean_content']}\n")
+                        f.write("</details>\n\n")
+                
             except Exception as e:
                 f.write("## Error Report\n")
                 f.write(f"An error occurred during document analysis:\n")
