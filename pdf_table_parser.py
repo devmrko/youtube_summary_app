@@ -24,17 +24,19 @@ import io
 import oci
 
 MODEL_ID = "ocid1.generativeaimodel.oc1.us-chicago-1.amaaaaaask7dceyarleil5jr7k2rykljkhapnvhrqvzx4cwuvtfedlfxet4q"
+logger = logging.getLogger(__name__)
 
 class EnhancedPDFTableParser:
+
     def __init__(self, output_dir: str = "parsed_tables"):
         """Initialize the Enhanced PDF Table Parser"""
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
 
-
-        
         # Initialize OCI configuration
         try:
+            print(f"# Initialize OCI configuration")
+
             self.config = oci.config.from_file()
 
             self.llm_client = oci.generative_ai_inference.GenerativeAiInferenceClient(
@@ -55,39 +57,6 @@ class EnhancedPDFTableParser:
                 "region": os.getenv("OCI_REGION", "us-ashburn-1")
             }
         
-        # Special character mappings
-        self.special_chars = {
-            '제곱': '²',
-            'squared': '²',
-            'cubic': '³',
-            'sum': '∑',
-            'delta': 'Δ',
-            'micro': 'μ',
-            'degree': '°',
-            'plusminus': '±',
-            'times': '×',
-            'divide': '÷',
-            'alpha': 'α',
-            'beta': 'β',
-            'gamma': 'γ',
-            'omega': 'Ω'
-        }
-
-        # Superscript number mappings
-        self.superscript_map = {
-            '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-            '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
-            '-': '⁻', '+': '⁺', '=': '⁼', '(': '⁽', ')': '⁾',
-            'n': 'ⁿ', 'i': 'ⁱ'
-        }
-
-        # Korean number mappings
-        self.korean_numbers = {
-            '영': '0', '일': '1', '이': '2', '삼': '3', '사': '4',
-            '오': '5', '육': '6', '칠': '7', '팔': '8', '구': '9',
-            '십': '10'
-        }
-        
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s'
@@ -97,9 +66,11 @@ class EnhancedPDFTableParser:
         # Install required dependencies
         self._install_dependencies()
 
+    # Install required dependencies about OCR
     def _install_dependencies(self):
         """Install required dependencies"""
         try:
+            print(f"# Initialize dependencies for OCR")
             import jpype
             import pytesseract
             import pdf2image
@@ -114,6 +85,7 @@ class EnhancedPDFTableParser:
     def _perform_ocr(self, image: Image.Image) -> str:
         """Perform OCR on an image"""
         try:
+            print(f"# Perform OCR on an image")
             # Configure Tesseract for better number recognition
             custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist="0123456789.×^*·E() "' 
             return pytesseract.image_to_string(image, config=custom_config)
@@ -121,27 +93,12 @@ class EnhancedPDFTableParser:
             self.logger.error(f"OCR error: {str(e)}")
             return ""
 
-    def _process_cell_with_ocr(self, cell_image: Image.Image) -> str:
-        """Process a single cell with OCR and apply scientific notation formatting"""
-        try:
-            # Perform OCR on the cell
-            text = self._perform_ocr(cell_image)
-            
-            # Clean and normalize the text
-            text = text.strip()
-            text = self._normalize_scientific_notation(text)
-            text = self._normalize_special_chars(text)
-            
-            return text
-        except Exception as e:
-            self.logger.error(f"Cell OCR processing error: {str(e)}")
-            return ""
-
     def extract_tables(self, pdf_path: str) -> List[Dict]:
         """Extract tables using Tabula's detection with OCR enhancement"""
         tables = []
         
         try:
+            print(f"# Extract tables using Tabula's detection with OCR enhancement")
             # Try to find poppler path
             poppler_path = None
             possible_paths = [
@@ -199,7 +156,7 @@ class EnhancedPDFTableParser:
                         processed_table = self._process_table(df_enhanced, page_num)
                         if processed_table:
                             tables.append(processed_table)
-                            self.logger.info(f"Extracted table from page {page_num}")
+                            print(f"Extracted table from page {page_num}")
             
             return tables
             
@@ -210,6 +167,7 @@ class EnhancedPDFTableParser:
     def _enhance_table_with_ocr(self, df: pd.DataFrame, page_image: Image.Image, table_area: Dict) -> pd.DataFrame:
         """Enhance table data with OCR processing"""
         try:
+            print(f"# Enhance table data with OCR processing")
             # Create a copy of the DataFrame
             df_enhanced = df.copy()
             
@@ -251,58 +209,10 @@ class EnhancedPDFTableParser:
             self.logger.error(f"Error enhancing table with OCR: {str(e)}")
             return df
 
-    def _normalize_special_chars(self, text: str) -> str:
-        """Normalize special characters and mathematical symbols with improved scientific notation handling"""
-        if not isinstance(text, str):
-            return text
-            
-        # Convert full-width characters to half-width
-        text = unicodedata.normalize('NFKC', text)
-        
-        # Handle scientific notation patterns
-        def handle_scientific_notation(match):
-            base = match.group(1)
-            power = match.group(2)
-            # Convert to proper scientific notation format
-            return f"{base}×10{self._to_superscript(power)}"
-        
-        # Scientific notation patterns
-        scientific_patterns = [
-            (r'(\d+\.?\d*)\s*[·*]\s*10\s*(?:squared|제곱)?\s*(\d+)', handle_scientific_notation),  # 2.3 * 10 squared 19
-            (r'(\d+\.?\d*)\s*[·*]\s*10\^(\d+)', handle_scientific_notation),  # 2.3 * 10^19
-            (r'(\d+\.?\d*)[Ee](\d+)', handle_scientific_notation),  # 2.3E19
-        ]
-        
-        for pattern, handler in scientific_patterns:
-            text = re.sub(pattern, handler, text)
-        
-        # Handle multiplication symbols
-        text = re.sub(r'\*', '×', text)  # Replace * with ×
-        text = re.sub(r'·', '×', text)   # Replace · with ×
-        
-        # Handle Korean number + 제곱 pattern
-        for kor_num, digit in self.korean_numbers.items():
-            text = text.replace(f"{kor_num}제곱", self._to_superscript(digit))
-        
-        # Handle "제곱" with preceding number
-        text = re.sub(r'(\d+)제곱', lambda m: self._to_superscript(m.group(1)), text)
-        
-        # Handle number followed by "승"
-        text = re.sub(r'(\d+)승', lambda m: self._to_superscript(m.group(1)), text)
-        
-        # Handle other special character words
-        for word, symbol in self.special_chars.items():
-            text = text.replace(word, symbol)
-        
-        return text
-
-    def _to_superscript(self, number: str) -> str:
-        """Convert a number string to superscript"""
-        return ''.join(self.superscript_map[d] for d in str(number))
-
     def _process_table(self, df: pd.DataFrame, page_num: int) -> Dict:
         """Process extracted table and improve its structure"""
         try:
+            print(f"# Process extracted table and improve its structure")
             # Pre-process scientific notation before general special characters
             df = df.applymap(lambda x: self._normalize_scientific_notation(str(x)) if pd.notnull(x) else x)
             
@@ -340,6 +250,7 @@ class EnhancedPDFTableParser:
     def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """Clean and improve DataFrame structure"""
         try:
+            print(f"# Clean and improve DataFrame structure")
             # Remove empty rows and columns
             df = df.replace(r'^\s*$', np.nan, regex=True)
             df = df.dropna(how='all', axis=0).dropna(how='all', axis=1)
@@ -364,6 +275,7 @@ class EnhancedPDFTableParser:
 
     def _is_header_row(self, row: pd.Series) -> bool:
         """Improved header row detection"""
+        print(f"# Improved header row detection")
         if row.empty:
             return False
         
@@ -374,70 +286,13 @@ class EnhancedPDFTableParser:
         
         return (non_empty_cells & short_cells & non_numeric).mean() > 0.8
 
-    def _check_special_chars(self, df: pd.DataFrame) -> Dict[str, List[str]]:
-        """Check for special characters in the DataFrame"""
-        special_chars_found = {'mathematical': [], 'scientific': [], 'other': []}
-        
-        # Regular expressions for different types of special characters
-        math_pattern = r'[²³∑±×÷⁰¹²³⁴⁵⁶⁷⁸⁹]'
-        scientific_pattern = r'[αβγμΩΔ°]'
-        
-        for col in df.columns:
-            for value in df[col].astype(str):
-                if re.search(math_pattern, value):
-                    special_chars_found['mathematical'].extend(re.findall(math_pattern, value))
-                if re.search(scientific_pattern, value):
-                    special_chars_found['scientific'].extend(re.findall(scientific_pattern, value))
-                
-                # Find other unicode special characters
-                other_chars = [c for c in value if unicodedata.category(c).startswith(('So', 'Sm'))]
-                if other_chars:
-                    special_chars_found['other'].extend(other_chars)
-        
-        # Remove duplicates
-        special_chars_found = {k: list(set(v)) for k, v in special_chars_found.items()}
-        return special_chars_found
-
-    def _normalize_scientific_notation(self, text: str) -> str:
-        """Pre-process scientific notation before general special character handling"""
-        if not isinstance(text, str):
-            return text
-        
-        # Pattern for scientific notation with various formats
-        patterns = [
-            # 2.3 * 10 squared 19
-            r'(\d+\.?\d*)\s*[·*]\s*10\s*(?:squared|제곱)?\s*(\d+)',
-            # 2.3 * 10^19
-            r'(\d+\.?\d*)\s*[·*]\s*10\^(\d+)',
-            # 2.3E19
-            r'(\d+\.?\d*)[Ee](\d+)',
-            # Handle concatenated format like 1019 -> 10¹⁹
-            r'10(\d{2,})',  # Match '10' followed by 2 or more digits
-            # Handle format like 2.3·1019 -> 2.3×10¹⁹
-            r'(\d+\.?\d*)[·*]10(\d{2,})'
-        ]
-        
-        for pattern in patterns:
-            if pattern.startswith(r'10(\d{2,})'):
-                # Special handling for concatenated format
-                text = re.sub(pattern, lambda m: f"10{self._to_superscript(m.group(1))}", text)
-            elif pattern.startswith(r'(\d+\.?\d*)[·*]10(\d{2,})'):
-                # Special handling for number·10XX format
-                text = re.sub(pattern, lambda m: f"{m.group(1)}×10{self._to_superscript(m.group(2))}", text)
-            else:
-                # Standard scientific notation handling
-                text = re.sub(pattern, 
-                            lambda m: f"{m.group(1)}×10{self._to_superscript(m.group(2))}",
-                            text)
-        
-        return text
-
     def save_tables(self, tables: List[Dict]) -> None:
         """Save tables in multiple formats with improved organization"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         for i, table in enumerate(tables, 1):
             try:
+                print(f"# Save tables in multiple formats with improved organization")
                 # Create directory for this table
                 table_dir = self.output_dir / f"table_{i}_page{table['metadata']['page']}_{timestamp}"
                 table_dir.mkdir(exist_ok=True)
@@ -491,7 +346,7 @@ class EnhancedPDFTableParser:
                 with open(meta_path, 'w', encoding='utf-8') as f:
                     json.dump(table['metadata'], f, indent=4, ensure_ascii=False)
                 
-                self.logger.info(f"Saved table to {table_dir}")
+                print(f"Saved table to {table_dir}")
                 
             except Exception as e:
                 self.logger.error(f"Error saving table {i}: {str(e)}")
@@ -520,55 +375,9 @@ class EnhancedPDFTableParser:
                 'pages': []
             }
             
-            # Special character mapping for text extraction
-            special_char_map = {
-                '¹': ' power 1 ',
-                '²': ' power 2 ',
-                '³': ' power 3 ',
-                '⁴': ' power 4 ',
-                '⁵': ' power 5 ',
-                '⁶': ' power 6 ',
-                '⁷': ' power 7 ',
-                '⁸': ' power 8 ',
-                '⁹': ' power 9 ',
-                '⁰': ' power 0 ',
-                '×': ' times ',
-                '·': ' times ',
-                '*': ' times ',
-                '^': ' power ',
-                '±': ' plus-minus ',
-                'Δ': ' delta ',
-                'μ': ' micro ',
-                'α': ' alpha ',
-                'β': ' beta ',
-                'γ': ' gamma ',
-                'Ω': ' omega ',
-                '∑': ' sum ',
-                '°': ' degrees ',
-            }
-            
-            def process_special_chars(text):
-                """Process special characters in text"""
-                # First handle scientific notation patterns
-                text = re.sub(r'(\d+)(?:E|e|×10|x10|·10)(\d+)', 
-                            lambda m: f"{m.group(1)} times 10 power {m.group(2)}", 
-                            text)
-                
-                # Handle superscript numbers after 10
-                text = re.sub(r'10([⁰¹²³⁴⁵⁶⁷⁸⁹]+)', 
-                            lambda m: f"10 power {''.join(special_char_map.get(c, c).strip() for c in m.group(1))}", 
-                            text)
-                
-                # Replace other special characters
-                for char, replacement in special_char_map.items():
-                    text = text.replace(char, replacement)
-                
-                # Clean up multiple spaces
-                text = re.sub(r'\s+', ' ', text)
-                return text
-            
             # First try with pdfplumber
             with pdfplumber.open(pdf_path) as pdf:
+                print(f"# Extract text content and structure from PDF while preserving original spacing and special characters")
                 full_text = ""
                 for page_num, page in enumerate(pdf.pages, 1):
                     # Get page dimensions
@@ -592,7 +401,7 @@ class EnhancedPDFTableParser:
                     
                     for word in words:
                         # Process special characters in the word
-                        word_text = process_special_chars(word['text'])
+                        word_text = word['text']
                         
                         # If this is a new line
                         if current_line_top == -1 or abs(word['top'] - current_line_top) > 3:
@@ -717,6 +526,7 @@ class EnhancedPDFTableParser:
     def _process_markdown_with_summaries(self, markdown_path: str, deepl_api_key: str = None) -> Dict:
         """Process markdown report to add summaries and translations"""
         try:
+            print(f"# Process markdown report to add summaries and translations")
             import deepl
             import oci
             from oci.generative_ai_inference import GenerativeAiInferenceClient
@@ -772,6 +582,7 @@ class EnhancedPDFTableParser:
                             content,
                             target_lang="KO",
                         ).text
+                        
                     except Exception as e:
                         self.logger.error(f"Translation error: {str(e)}")
 
@@ -805,6 +616,7 @@ class EnhancedPDFTableParser:
     def _get_oci_summary(self, text: str, ai_client: 'GenerativeAiInferenceClient') -> str:
         """Generate summary using OCI Generative AI"""
         try:
+            print(f"# Generate summary using OCI Generative AI")
             # Create text content
             content = oci.generative_ai_inference.models.TextContent()
             content.text = f"Please summarize this text:\n\n{text}"
@@ -856,6 +668,7 @@ class EnhancedPDFTableParser:
 
 def main():
     """Main execution function"""
+    print(f"# Main execution function")
     parser = EnhancedPDFTableParser()
     
     pdf_path = input("Enter the path to your PDF file: ").strip()
