@@ -75,6 +75,12 @@ def get_translator(source_lang, target_lang):
                 return translated
             
             return translate_ja_ko
+        # elif direction == 'en2ko':
+        #     return pipeline("translation", model="skywood/NHNDQ-nllb-finetuned-en2ko-ct2-float16", 
+        #                   device=device, 
+        #                   src_lang=LANG_MAP[source_lang],
+        #                   tgt_lang=LANG_MAP[target_lang])
+
         else:
             # Standard NLLB model
             return pipeline('translation', 
@@ -172,16 +178,20 @@ def translate():
                     p = p.strip()
                     
                     # Split into sentences first (to handle multiple sentences in one paragraph)
-                    sentences = re.split(r'(?<=[.!?。！？])\s*', p)
+                    # Avoid splitting on decimal points by checking that a period is not between digits
+                    sentences = re.split(r'(?<=[.!?。！？])(?!\d)\s*|(?<=[:;,，、；：])\s+', p)
                     
                     # Process each sentence
                     processed_sentences = []
                     for s in sentences:
                         s = s.strip()
                         if s:
-                            # Add period if needed
-                            if not s[-1] in '.!?。！？':
+                            # Add period if needed - check for punctuation at end
+                            if len(s) > 0 and not any(s.endswith(punct) for punct in '.!?。！？,:;，、；：'):
                                 s = s + '. '  # Add period and space
+                            elif len(s) > 0 and any(s.endswith(punct) for punct in ',:;，、；：'):
+                                # If sentence ends with a comma or similar, add a space
+                                s = s + ' '
                             processed_sentences.append(s)
                     
                     for x in processed_sentences:
