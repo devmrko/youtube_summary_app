@@ -54,7 +54,10 @@ def translate_text(input_text, source_lang, target_lang):
                 return f"Translation Error: {result['error']}"
             
             # Extract the translated text
-            translated_text = ast.literal_eval(result.get('translated_text', 'No translation found'))
+            if isinstance(result, dict):
+                translated_text = result.get('translated_text', 'No translation found')
+            else:
+                translated_text = result
             
             # Handle different response formats
             if isinstance(translated_text, list):
